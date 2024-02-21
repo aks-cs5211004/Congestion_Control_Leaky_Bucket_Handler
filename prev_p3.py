@@ -1,0 +1,361 @@
+import hashlib
+import math
+import random
+import select
+import threading
+import time
+from socket import *
+
+import matplotlib.pyplot as plt
+
+# servername="vayu.iitd.ac.in"
+servername="10.17.7.218"
+# servername="10.17.7.134"
+# servername="10.17.51.115"
+# servername='10.17.6.5'
+# servername="127.1.1.0"
+serverport=9802
+server_socket = socket(AF_INET, SOCK_DGRAM)
+
+
+# Parameters
+cw=10
+if(servername=='127.1.1.0'):
+    diff_min=0.0035
+else:
+    diff_min=0.0084
+diff_min_0=diff_min
+diff=diff_min
+rtt=0.001
+timeout=2*rtt
+window=1
+
+# Variables
+skip=0
+sqish=0
+noreq=0
+submit=""
+sublist=[]
+sendtime=[]
+recvtime=[]
+diff_of_data=1448
+nol=0
+k=[(i*diff_of_data) for i in range(cw)]
+devrtt=0
+duration_send=[]
+duration_recv=[]
+deploy_time=0
+ts=0
+squishstart=0
+squishstate=0
+equal=0
+tsquish=0
+
+# Plots
+diff_array=[]
+samplertt_array=[]
+estimatrtt_array=[]
+win_array=[]
+
+# Locks
+lock1=threading.Lock()
+lock2=threading.Lock()
+lock3=threading.Lock()
+lock4=threading.Lock()
+lock5=threading.Lock()
+
+def CLOSE():
+        server_socket.close()
+        
+def SUBMIT(submit):
+    diff=0.04
+    for i in range(len(sublist)):
+        submit+=sublist[i]
+    submit=submit[:len(submit)-1]
+    result=hashlib.md5(submit.encode())
+    print(result.hexdigest())
+    sentence = "Submit: cs5211004@blue_flag\nMD5: "+str(result.hexdigest())+"\n\n"
+    while(True):
+        try:
+            if(time.time()-ts>diff):
+                server_socket.sendto(sentence.encode(),(servername, serverport))
+                server_socket.settimeout(2)
+                st, serverAddress = server_socket.recvfrom(4096)
+                ts=time.time()
+                if(st.decode().split("\n")[0].split(" ")[0]=="Result:"):
+                    print(st.decode())
+                    break
+                else:
+                    continue
+        except Exception as e:
+                ts=time.time()
+                continue
+            
+def findNol():
+    global nol
+    global sublist
+    global sendtime
+    global recvtime
+    global ts
+    # RESET
+    sentence = "Reset\n\n"
+    server_socket.sendto(sentence.encode(),(servername, serverport))
+    
+    # NOLines
+    sentence = "SendSize\n\n"
+    ts=0
+    diff=0.01
+    while(True):
+            try:
+                if(time.time()-ts>diff):
+                    server_socket.sendto(sentence.encode(),(servername, serverport))
+                    server_socket.settimeout(2)
+                    st, serverAddress = server_socket.recvfrom(4096)
+                    ts=time.time()
+                    break
+            except Exception as e:
+                print("Server Error")
+                ts=time.time()
+                continue
+    nol=int(st.decode().split("\n")[0].split(" ")[1])
+    print("NOL: ", nol)
+    print("Len of Sublist: ", nol//diff_of_data +1)
+    sublist=["" for i in range((nol//diff_of_data)+1)]
+    sendtime=[0 for i in range((nol//diff_of_data)+1)]
+    recvtime=[0 for i in range((nol//diff_of_data)+1)]
+    
+    
+def check_filled(list,i):
+    for k  in range(i,len(sublist),cw):
+        if(list[k]==""):
+            return True
+            break
+    return False
+def check_length(list):
+    c=0
+    for i  in range(len(list)):
+        if(list[i]!=""):
+            c+=1
+    return c
+    
+
+def implement_thread(i):
+    global sublist
+    global k
+    global skip
+    global sqish
+    global cw
+    global noreq
+    global rtt
+    global devrtt
+    global timeout
+    global diff
+    global diff_min
+    global deploy_time
+    global ts
+    global duration_send
+    global duration_recv
+    global sendtime
+    global recvtime
+    global squishstart
+    global squishstate
+    global equal
+    global window
+    global tsquish
+    max_burst=1
+    ts=time.time()
+    while(check_filled(sublist,i)):
+            lock5.acquire()
+            k[i]=i*diff_of_data
+            # print("Filled Sublist=",check_length(sublist))
+            lock5.release()
+            while(k[i]<=(nol//diff_of_data)*diff_of_data and (time.time()-ts>diff)):
+                if(sublist[k[i]//diff_of_data]==""):
+                            tempwindow=window
+                            lock4.acquire()
+                            for win in range(min(math.floor(tempwindow),max_burst)):
+                                if((k[i]+win*cw*diff_of_data)//diff_of_data<len(sublist) and sublist[(k[i]+win*cw*diff_of_data)//diff_of_data]==""):
+                                    sentence = "Offset: "+str(k[i]+win*cw*diff_of_data)+"\nNumBytes: "+str(diff_of_data)+"\n\n"
+                                    server_socket.sendto(sentence.encode(),(servername, serverport))
+                                    if(sublist[(k[i]+win*cw*diff_of_data)//diff_of_data]==""):
+                                        sendtime[(k[i]+win*cw*diff_of_data)//diff_of_data]=time.time()
+                                        duration_send.append([k[i]+win*cw*diff_of_data,sendtime[(k[i]+win*cw*diff_of_data)//diff_of_data]-deploy_time])
+                                    ts=time.time()
+                                    noreq+=1
+                            lock4.release()
+                            
+                        
+                            for win in range(min(math.floor(tempwindow),max_burst)):
+                                try:
+                                    server_socket.settimeout(timeout)
+                                    st, serverAddress = server_socket.recvfrom(4096)
+                                    lis=st.decode().split("\n")
+                                    if(sublist[(int(lis[0].split(" ")[1]))//diff_of_data]=="" and lis[2]==""):
+                                        recvtime[(int(lis[0].split(" ")[1]))//diff_of_data]=time.time()
+                                    if(sublist[(int(lis[0].split(" ")[1]))//diff_of_data]==""):
+                                        lock1.acquire()
+                                        lis=st.decode().split("\n")
+                                        if(lis[2]!=""):
+                                            tsquish=time.time()
+                                            sqish+=1
+                                            print("QISHED:..............",squishstart," diff= ",diff)
+                                            squishstart+=1
+                                            if(squishstart>=40):
+                                                window=1
+                                                squishstart=0
+                                                diff_min=(0.35)*10*diff_min+ (1-0.35)*diff_min
+                                            diff=max(max(diff_min,diff_min_0),(tsquish-sendtime[int(lis[0].split(" ")[1])//diff_of_data])/3)
+                                            diff_array.append([diff,tsquish-deploy_time])
+                                        else:
+                                            
+                                            squishstart=0
+                                            listofk=[(k[i]+win*cw*diff_of_data) for win in range(min(math.floor(tempwindow),max_burst))]
+                                            if(int(lis[0].split(" ")[1]) in listofk):
+                                                print("GOT   CORRECT LINE ",check_length(sublist), "diff ",diff)
+                                                strtmp=""
+                                                countuseless=0
+                                                for j in range(3):
+                                                    countuseless+=len(lis[j])+1
+                                                if(sublist[(int(lis[0].split(" ")[1]))//diff_of_data]==""):
+                                                    sublist[(int(lis[0].split(" ")[1]))//diff_of_data]=st.decode()[countuseless:]
+                                                    
+                                                    duration_recv.append([(int(lis[0].split(" ")[1])),recvtime[(int(lis[0].split(" ")[1]))//diff_of_data]-deploy_time])
+                                                    temp=int(lis[0].split(" ")[1])//diff_of_data
+                                                    if(sendtime[temp]<=recvtime[temp]):
+                                                        if(rtt>recvtime[temp]-sendtime[temp]):
+                                                            window+=1
+                                                        else:
+                                                            window=1
+                                                        rtt=(1-0.18)*rtt+0.18*(recvtime[temp]-sendtime[temp])
+                                                        devrtt=(1-0.25)*devrtt+0.25*abs(recvtime[temp]-sendtime[temp]-rtt)
+                                                        timeout=2*rtt+4*devrtt
+
+                                                        diff_min=(0.18)*diff_min/1.03+ (1-0.18)*diff_min
+                                                        diff=max(max(diff_min,diff_min_0),rtt/3)
+                                                        tupdate=time.time()
+                                                        diff_array.append([diff,tupdate-deploy_time])
+                                                        estimatrtt_array.append([rtt,tupdate-deploy_time])
+                                                        samplertt_array.append([recvtime[temp]-sendtime[temp],tupdate-deploy_time])
+                                                        win_array.append([min(tempwindow,max_burst),tupdate-deploy_time])
+                                                        
+                                                    
+                                                        
+                                            else:
+                                                print("GOT INCORRECT LINE ",check_length(sublist), "diff ",diff)
+                                                strtmp=""
+                                                countuseless=0
+                                                for j in range(3):
+                                                    countuseless+=len(lis[j])+1
+                                                if(sublist[(int(lis[0].split(" ")[1]))//diff_of_data]==""):
+                                                    sublist[(int(lis[0].split(" ")[1]))//diff_of_data]=st.decode()[countuseless:]
+                                                    
+                                                    duration_recv.append([(int(lis[0].split(" ")[1])),recvtime[(int(lis[0].split(" ")[1]))//diff_of_data]-deploy_time])
+                                                    temp=int(lis[0].split(" ")[1])//diff_of_data
+                                                    if(sendtime[temp]<=recvtime[temp]):
+                                                        
+                                                        window=1
+                                                        rtt=(1-0.4)*rtt+0.4*(recvtime[temp]-sendtime[temp])
+                                                        devrtt=(1-0.25)*devrtt+0.25*abs(recvtime[temp]-sendtime[temp]-rtt)
+                                                        timeout=2*rtt+4*devrtt
+                                                        diff=max(max(diff_min,diff_min_0),rtt/3)
+                                                        tupdate=time.time()
+                                                        diff_array.append([diff,tupdate-deploy_time])
+                                                        estimatrtt_array.append([rtt,tupdate-deploy_time])
+                                                        samplertt_array.append([recvtime[temp]-sendtime[temp],tupdate-deploy_time])
+                                                        win_array.append([min(tempwindow,max_burst),tupdate-deploy_time])
+                                                        
+                                        lock1.release()
+                                except Exception as e:
+                                    skip+=1
+                                    window=1
+                                    # if(check_length(sublist)<100):
+                                    #     diff_min=(0.25)*1.01*diff_min+ (1-0.22)*diff_min
+                                    # if(300>check_length(sublist)>100):
+                                    #     diff_min=(0.25)*1.02*diff_min+ (1-0.22)*diff_min
+                                    # if(700>check_length(sublist)>300):
+                                    #     diff_min=(0.25)*1.03*diff_min+ (1-0.22)*diff_min
+                                    # if(1200>check_length(sublist)>700):
+                                    #     diff_min=(0.25)*1.04*diff_min+ (1-0.22)*diff_min
+                                    # if(check_length(sublist)>1200):
+                                    #     diff_min=(0.25)*1.05*diff_min+ (1-0.22)*diff_min
+                                    # timeout=diff_min*6
+                                    diff_min=(0.75)*(1.03)*diff_min+ (1-0.75)*diff_min
+                                    
+                                    diff=max(max(diff_min,diff_min_0),rtt/2)
+                                    tupdate=time.time()
+                                    diff_array.append([diff,tupdate-deploy_time])
+                                    win_array.append([win,tupdate-deploy_time])
+                                    
+                k[i]=k[i]+diff_of_data*cw
+                        
+            
+def main():
+    
+    tstart=time.time()
+    global deploy_time
+    global cw
+    findNol()
+    
+    
+    thread = []
+    for i in range (cw):
+            thread.append(threading.Thread(target=implement_thread, args=(i,)))  
+    deploy_time=time.time()
+    for i in range (cw):
+            thread[i].start()
+    for i in range (cw):
+            thread[i].join()
+            
+            
+            
+    SUBMIT(submit)
+    CLOSE()
+    
+    
+    # Plomts
+    send=[k[0] for k in duration_send]
+    recv=[k[0] for k in duration_recv]
+    timeline_send=[k[1] for k in duration_send]
+    timeline_recv=[k[1] for k in duration_recv]
+    plot_recv=plt.scatter(recv, timeline_recv,color= "orange",  
+            marker= "*", s=60)
+    plot_send=plt.scatter(send, timeline_send,color= "blue",  
+            marker= "o", s=5)
+    plt.legend([plot_recv,plot_send],["Recvd Lines","Send Request"])
+    plt.xlabel('Offset') 
+    plt.ylabel('Time(in seconds)') 
+    plt.title('Offset vs Time Graph') 
+    plt.show()
+    
+    diff_c=[k[0] for k in diff_array]
+    time_c=[k[1] for k in diff_array]
+    plot_send=plt.plot(time_c, diff_c,color= "green")
+    plt.xlabel('Time(in seconds)') 
+    plt.ylabel('Time Difference between 2 Requests') 
+    plt.title('Time Difference vs Time Graph') 
+    plt.show()
+    
+    estrtt_c=[k[0] for k in estimatrtt_array]
+    samrtt_c=[k[0] for k in samplertt_array]
+    time_c=[k[1] for k in samplertt_array]
+    plot_send=plt.plot(time_c, estrtt_c,color= "orange")
+    plot_send=plt.plot(time_c, samrtt_c,color= "yellow")
+    plt.xlabel('Time(in seconds)') 
+    plt.ylabel('Variation of Sample RTT and Estimated RTT') 
+    plt.title('RTT vs Time Graph') 
+    plt.show()
+    
+    # win_c=[k[0] for k in win_array]
+    # time_c=[k[1] for k in win_array]
+    # plot_send=plt.scatter(time_c, win_c,color= "green",  
+    #         marker= "*", s=1)
+    # plt.xlabel('Time(in seconds)') 
+    # plt.ylabel('No. of UnAcked Packets/5') 
+    # plt.title('Congestion Window vs Time Graph') 
+    # plt.show()
+    
+    
+
+
+    
+main()
